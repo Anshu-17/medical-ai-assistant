@@ -3,7 +3,7 @@ langchain-core==0.3.79
 langchain-community==0.3.20
 langchain-google-genai==2.0.10
 langchain-pinecone==0.2.12
-pinecone-client==5.0.1
+pinecone-client==2.2.4
 google-generativeai==0.8.3
 sentence-transformers==3.3.1
 torch==2.5.1
