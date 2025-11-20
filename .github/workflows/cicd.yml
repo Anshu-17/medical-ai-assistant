@@ -1,0 +1,117 @@
+name: Deploy Betamax Medical Bot to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Building Docker image..."
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "Docker image built successfully"
+
+      - name: Push Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Pushing Docker image to ECR..."
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "Docker image pushed successfully"
+
+  deploy-to-ec2:
+    needs: build-and-deploy
+    runs-on: self-hosted
+    
+    steps:
+      - name: Pull Docker image from ECR
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          ECR_REPO: ${{ secrets.ECR_REPO }}
+        run: |
+          # Configure AWS CLI
+          aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+          aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+          aws configure set default.region $AWS_DEFAULT_REGION
+          
+          # Login to ECR
+          aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin 315865595366.dkr.ecr.us-east-1.amazonaws.com
+          
+          # Pull latest image
+          docker pull 315865595366.dkr.ecr.us-east-1.amazonaws.com/$ECR_REPO:latest
+
+      - name: Stop and remove old container
+        run: |
+          # Stop existing container if running
+          docker stop betamax-app || true
+          docker rm betamax-app || true
+          
+          # Remove old images to save space (keep latest)
+          docker image prune -af --filter "until=24h" || true
+
+      - name: Run new Docker container
+        env:
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          ECR_REPO: ${{ secrets.ECR_REPO }}
+        run: |
+          docker run -d \
+            --name betamax-app \
+            --restart unless-stopped \
+            -p 8501:8501 \
+            -e PINECONE_API_KEY=$PINECONE_API_KEY \
+            -e GOOGLE_API_KEY=$GOOGLE_API_KEY \
+            -e SERPAPI_KEY=$SERPAPI_KEY \
+            315865595366.dkr.ecr.us-east-1.amazonaws.com/$ECR_REPO:latest
+
+      - name: Wait for application to start
+        run: |
+          echo "Waiting for application to start..."
+          sleep 15
+          
+      - name: Check container status
+        run: |
+          echo "=== Container Status ==="
+          docker ps -a | grep betamax-app || echo "Container not found"
+          
+          echo -e "\n=== Container Logs ==="
+          docker logs betamax-app --tail 50 || echo "Could not fetch logs"
+          
+          echo -e "\n=== Health Check ==="
+          curl -f http://localhost:8501/_stcore/health || echo "Health check failed"
+
+      - name: Cleanup old images
+        run: |
+          # Remove dangling images
+          docker image prune -f || true
