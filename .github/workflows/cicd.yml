@@ -65,7 +65,7 @@ jobs:
           aws configure set default.region $AWS_DEFAULT_REGION
           
           # Login to ECR
-          aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin docker pull 474668421245.dkr.ecr.us-east-1.amazonaws.com
+          aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin 474668421245.dkr.ecr.us-east-1.amazonaws.com
           
           # Pull latest image
           docker pull 474668421245.dkr.ecr.us-east-1.amazonaws.com/$ECR_REPO:latest
